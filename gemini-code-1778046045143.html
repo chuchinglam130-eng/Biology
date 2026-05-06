@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Maltase Lab Simulation</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background: #f0f2f5; display: flex; flex-direction: column; align-items: center; padding: 20px; }
+        #main-layout { display: flex; gap: 20px; align-items: flex-start; max-width: 1250px; }
+        #lab-bench { width: 600px; height: 400px; background: #ffffff; border: 4px solid #2c3e50; position: relative; overflow: hidden; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); }
+        #graph-container { width: 450px; height: 400px; background: white; padding: 15px; border-radius: 12px; border: 2px solid #34495e; box-shadow: 0 4px 10px rgba(0,0,0,0.05); }
+        
+        #visual-legend { width: 600px; background: white; margin-top: 10px; padding: 15px; border-radius: 12px; border: 2px solid #bdc3c7; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .leg-item { display: flex; align-items: center; font-size: 12px; font-weight: bold; color: #34495e; }
+        .swatch { width: 16px; height: 16px; margin-right: 8px; border: 1px solid #333; flex-shrink: 0; }
+        
+        .controls { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; background: #fff; padding: 20px; border-radius: 12px; width: 1080px; margin-top: 15px; }
+        .slider-box { display: flex; flex-direction: column; font-size: 12px; font-weight: bold; }
+        
+        .enzyme { position: absolute; width: 40px; height: 40px; background: #8e44ad; border-radius: 50%; border: 2px solid #2c3e50; z-index: 5; transition: background 0.3s, border-radius 0.3s; }
+        .enzyme.denatured { width: 55px !important; height: 30px !important; border-radius: 40% !important; background: #6c3483 !important; }
+        .enzyme.inhibited { border-radius: 15% 85% 15% 85% / 50% !important; background: #4a235a !important; transform: rotate(15deg); }
+        .active-site { position: absolute; width: 16px; height: 16px; background: #fff; top: -2px; left: 12px; border: 2px solid #2c3e50; border-top: none; z-index: 6; }
+        .inhibited .active-site { height: 4px !important; top: 4px !important; background: #2c3e50 !important; width: 10px !important; }
+
+        .starch { position: absolute; width: 16px; height: 16px; background: #f1c40f; border: 1px solid #d4ac0d; z-index: 4; }
+        .maltose { position: absolute; width: 0; height: 0; border-left: 8px solid transparent; border-right: 8px solid transparent; border-bottom: 16px solid #e67e22; z-index: 3; }
+        .inhibitor-comp { position: absolute; width: 14px; height: 14px; background: #e74c3c; border: 1px solid #c0392b; z-index: 10; }
+        .inhibitor-noncomp { position: absolute; width: 12px; height: 12px; background: #3498db; border-radius: 50%; border: 1px solid #2980b9; z-index: 6; }
+        
+        button { grid-column: span 3; padding: 15px; background: #27ae60; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; font-size: 1.1em; }
+        button:hover { background: #219150; }
+    </style>
+</head>
+<body>
+
+<div id="main-layout">
+    <div>
+        <div id="lab-bench"></div>
+        <div id="visual-legend">
+            <div class="leg-item"><div class="swatch" style="background:#f1c40f"></div> Starch (Substrate)</div>
+            <div class="leg-item"><div class="swatch" style="width:0; height:0; border-left:8px solid transparent; border-right:8px solid transparent; border-bottom:16px solid #e67e22; border-top:none;"></div> Maltose (Product)</div>
+            <div class="leg-item"><div class="swatch" style="background:#8e44ad; border-radius:50%"></div> Maltase (Enzyme)</div>
+            <div class="leg-item"><div class="swatch" style="background:#e74c3c"></div> Competitive Inhibitor</div>
+            <div class="leg-item"><div class="swatch" style="background:#3498db; border-radius:50%"></div> Non-competitive Inhibitor</div>
+        </div>
+    </div>
+    <div id="graph-container"><canvas id="kineticsChart"></canvas></div>
+</div>
+
+<div class="controls">
+    <div class="slider-box"><label>Starch: <span id="starchText">50</span></label><input type="range" id="starch" min="10" max="100" value="50"></div>
+    <div class="slider-box"><label>Maltase: <span id="enzymeText">10</span></label><input type="range" id="enzyme" min="2" max="25" value="10"></div>
+    <div class="slider-box"><label>pH: <span id="phText">7.0</span></label><input type="range" id="ph" min="1" max="14" step="0.1" value="7"></div>
+    <div class="slider-box"><label>Temp (°C): <span id="tempText">37</span></label><input type="range" id="temp" min="0" max="100" value="37"></div>
+    <div class="slider-box"><label>Comp. Inh: <span id="inhCompText">0</span></label><input type="range" id="inhComp" min="0" max="25" value="0"></div>
+    <div class="slider-box"><label>Non-Comp. Inh: <span id="inhNonText">0</span></label><input type="range" id="inhNon" min="0" max="25" value="0"></div>
+    <button id="runBtn">RUN SIMULATION</button>
+</div>
+
+<script>
+    const bench = document.getElementById('lab-bench');
+    const runBtn = document.getElementById('runBtn');
+    let molecules = [];
+    let animId = null;
+    let chart;
+    let startTime;
+    let starchCount = 0;
+    let maltoseCount = 0;
+    let initialStarch = 0;
+    let isRunning = false;
+
+    // Fixed Y-Axis to Concentration (mmol/L)[cite: 1]
+    const ctx = document.getElementById('kineticsChart').getContext('2d');
+    chart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: [
+                { label: 'Starch (mmol/L)', borderColor: '#f1c40f', data: [], tension: 0.3, pointRadius: 0 },
+                { label: 'Maltose (mmol/L)', borderColor: '#e67e22', data: [], tension: 0.3, pointRadius: 0 }
+            ]
+        },
+        options: { 
+            responsive: true, 
+            maintainAspectRatio: false, 
+            animation: false,
+            scales: { 
+                y: { 
+                    beginAtZero: true, 
+                    title: { display: true, text: 'Concentration (mmol/L)' } 
+                }, 
+                x: { 
+                    title: { display: true, text: 'Time (s)' } 
+                } 
+            }
+        }
+    });
+
+    const sync = (id) => document.getElementById(id).oninput = (e) => document.getElementById(id + 'Text').innerText = e.target.value;
+    ['ph','temp','starch','enzyme','inhComp','inhNon'].forEach(sync);
+
+    function spawn(type, x, y) {
+        const el = document.createElement('div');
+        el.className = type;
+        if(type === 'enzyme') {
+            const site = document.createElement('div');
+            site.className = 'active-site';
+            el.appendChild(site);
+        }
+        bench.appendChild(el);
+        const mol = { 
+            el, type, 
+            x: x ?? Math.random() * 550, 
+            y: y ?? Math.random() * 350, 
+            vx: (Math.random() - 0.5) * 2.5, 
+            vy: (Math.random() - 0.5) * 2.5, 
+            state: 'active', 
+            attached: null 
+        };
+        molecules.push(mol);
+        return mol;
+    }
+
+    function init() {
+        isRunning = true;
+        if (animId) cancelAnimationFrame(animId);
+        
+        bench.innerHTML = '';
+        molecules = [];
+        initialStarch = parseInt(document.getElementById('starch').value);
+        starchCount = initialStarch;
+        maltoseCount = 0;
+        startTime = Date.now();
+        
+        chart.data.labels = []; 
+        chart.data.datasets[0].data = []; 
+        chart.data.datasets[1].data = [];
+        chart.update();
+
+        const counts = {
+            e: parseInt(document.getElementById('enzyme').value),
+            s: starchCount, 
+            ic: parseInt(document.getElementById('inhComp').value), 
+            inc: parseInt(document.getElementById('inhNon').value)
+        };
+
+        for(let i=0; i<counts.e; i++) spawn('enzyme');
+        for(let i=0; i<counts.s; i++) spawn('starch');
+        for(let i=0; i<counts.ic; i++) spawn('inhibitor-comp');
+        for(let i=0; i<counts.inc; i++) spawn('inhibitor-noncomp');
+        
+        loop();
+    }
+
+    function loop() {
+        if (!isRunning) return;
+
+        const ph = parseFloat(document.getElementById('ph').value);
+        const temp = parseFloat(document.getElementById('temp').value);
+        const isDenatured = temp > 85 || ph < 4.0 || ph > 10.0;
+        const speedMultiplier = (temp / 30) + 0.1;
+
+        molecules.forEach(m => {
+            if (m.state === 'dead') return;
+
+            if (m.type === 'enzyme' && isDenatured && m.state !== 'denatured') {
+                m.state = 'denatured';
+                m.el.classList.add('denatured');
+                if (m.attached) { m.attached.el.remove(); m.attached.state = 'dead'; m.attached = null; }
+            }
+
+            if (m.state !== 'attached') {
+                m.x += m.vx * speedMultiplier;
+                m.y += m.vy * speedMultiplier;
+                if(m.x < 0 || m.x > 560) m.vx *= -1;
+                if(m.y < 0 || m.y > 360) m.vy *= -1;
+            }
+
+            if (m.type === 'enzyme') {
+                if (m.attached) {
+                    m.attached.x = m.x + 13;
+                    m.attached.y = m.y - 10;
+                    m.attached.el.style.transform = `translate(${m.attached.x}px, ${m.attached.y}px)`;
+                }
+
+                if (m.state === 'active') {
+                    molecules.forEach(other => {
+                        if (other === m || other.state !== 'active') return;
+                        const dist = Math.hypot((m.x + 20) - (other.x + 8), (m.y + 10) - (other.y + 8));
+
+                        if (dist < 22) {
+                            if (other.type === 'inhibitor-comp') {
+                                m.state = 'blocked';
+                                other.state = 'attached';
+                                m.attached = other;
+                            } 
+                            else if (other.type === 'inhibitor-noncomp') {
+                                m.state = 'inhibited';
+                                m.el.classList.add('inhibited');
+                                other.el.remove(); other.state = 'dead';
+                            } 
+                            else if (other.type === 'starch') {
+                                const sx = other.x, sy = other.y;
+                                other.el.remove(); other.state = 'dead';
+                                spawn('maltose', sx, sy);
+                                spawn('maltose', sx + 6, sy + 6);
+                                starchCount--; maltoseCount++; // Logical 1:1 mmol conversion[cite: 1]
+                            }
+                        }
+                    });
+                }
+            }
+            m.el.style.transform = `translate(${m.x}px, ${m.y}px)`;
+        });
+
+        // Concentration mapping: Visual Count -> mmol/L[cite: 1]
+        const elapsed = (Date.now() - startTime) / 1000;
+        if (chart.data.labels.length === 0 || elapsed > parseFloat(chart.data.labels[chart.data.labels.length-1]) + 0.5) {
+            chart.data.labels.push(elapsed.toFixed(1));
+            chart.data.datasets[0].data.push(starchCount); // Assumes each visual unit = 1 mmol/L[cite: 1]
+            chart.data.datasets[1].data.push(maltoseCount);
+            chart.update('none');
+        }
+
+        animId = requestAnimationFrame(loop);
+    }
+
+    runBtn.addEventListener('click', init);
+</script>
+</body>
+</html>
